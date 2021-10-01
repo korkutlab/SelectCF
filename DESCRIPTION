@@ -1,0 +1,33 @@
+Package: SelectCF
+Title: Selector of Clustering Features
+Version: 0.0.0.9000
+Authors@R: 
+    person(given = "Xubin",
+           family = "Li",
+           role = c("aut", "cre"),
+           email = "lixubinp@gmail.com",
+           comment = c(ORCID = "0000-0003-1727-9215"))
+Description: A package for accurate and robust feature selection coupled with clustering. It contains implementations of sparse hierarchical clustering (SHC) and five novel algorithms. Briefly, we advance SHC and obtain two algorithms: SelectCF-FL, which replaces lasso with fused lasso to incorporate prior information of feature order, and SelectCF, which replaces lasso with spike-and-slab lasso to debias the effect of lasso without a priori information. Further, rSHC, rSelectCF-FL, and rSelectCF, are robust versions of SHC, SelectCF-FL, and SelectCF, respectively, in which selected features are robust to the existence of outliers. Among the presented algorithms, SelectCF and rSelectCF have the best performances in outlier-free datasets and outlier-existing datasets, respectively. These two algorithms achieve close-to-ideal feature selection coupled with clustering.
+License: GPL (>= 3)
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.1
+LinkingTo: 
+    Rcpp
+Imports: 
+    Rcpp,
+    MASS,
+    magrittr,
+    mixAK,
+    stringr
+Suggests: 
+    knitr,
+    rmarkdown,
+    tidyverse,
+    sparcl,
+    cccd,
+    leiden,
+    umap,
+    ggpubr
+VignetteBuilder: knitr

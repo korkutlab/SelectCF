@@ -1,0 +1,176 @@
+---
+title: "SelectCF: Selector of Clustering Features"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{SelectCF}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+This document introduces you to using SelectCF. We apply this algorithm to a simulation dataset for accurate feature selection coupled with clustering. It results in a small number of selected features with nonzero weights and a weighted dissimilarity matrix whose entries are pairwise distances between samples. The weighted dissimilarity matrix is then subjected to clustering and dimension reduction algorithms such as hierarchical clustering, Leiden clustering, and UMAP projection.
+
+```{r setup, message = FALSE, warning = FALSE}
+library(SelectCF)
+library(tidyverse)
+library(sparcl)
+library(cccd)
+library(leiden)
+library(umap)
+library(ggpubr)
+```
+
+## Generate simulation data
+We generate a simulation dataset, which has 120 samples characterized by 1000 features, including 50 informative features and 950 noise features. Each sample comes from one of 3 clusters, each of which has 40 samples. Samples of each cluster are fully described by the informative features, which follows a multivariate normal distribution. The noise features are independent and identically distributed from the standard normal distribution. 
+
+```{r, warning = FALSE}
+d <- sim_data(size_clusters = c(40, 40, 40),
+              p_inf = 50,
+              p_noise = 950,
+              out_pct = 0,
+              iseed = 1)
+```
+
+Perform PCA and visualize data in PC space.
+
+```{r, warning = FALSE}
+res.pca <- prcomp(d$x)
+tb <- tibble(y = as.character(d$y),
+             label = factor(as.character(d$lb), levels = as.character(0:3))) %>%
+  bind_cols(as_tibble(as.matrix(res.pca$x[, 1:2])))
+
+ggscatter(tb, x = "PC1", y = "PC2",
+          color = "label",
+          palette = c("red", "green", "blue", "orange"))
+```
+
+## Perform feature selection coupled with clustering
+Now we run SelectCF on the above dataset for feature selection coupled with clustering. SelectCF employs a spike-and-slab lasso penalty, which contains two hyperparameters: the spike variance parameter λ_0 and the slab variance parameter λ_1. We keep λ_1 to a small constant, and tune λ_0 during hyperparameter selection. To select the optimal value of λ_0, we employ a permutation based approach, the gap statistic. Given a hyperparameter λ_0, the gap statistic measures the strength of the clustering based on real data with respect to the one based on randomly permuted data that are supposed to have no cluster. 
+
+```{r, warning = FALSE}
+# To save time, one may reduce (1) the search space of lambda0s or (2) the number of permuations.
+# We observed the gap statistic is not sensitive to different permuted data, so we only use 3 permutations here.
+out <- SelectCF_gapstat(d$x,
+                        lambda0s = seq(0.01, 500, length = 20),
+                        lambda1 = 0.001,
+                        nperms = 3)
+```
+
+Plot gap statistic proflie as a function of the number of selected features.
+
+```{r, warning = FALSE}
+plot(out$w_l0norm,
+     out$gaps_mean,
+     log = "x",
+     xlab = "# Non-zero Features",
+     ylab = "Gap Statistics",
+     ylim = c(min(out$gaps_mean - out$gaps_se) - 0.0001,
+              max(out$gaps_mean + out$gaps_se) + 0.0001),
+     type = "l",
+     lwd = 1)
+
+arrows(x0 = out$w_l0norm,
+       y0 = out$gaps_mean - out$gaps_se,
+       x1 = out$w_l0norm,
+       y1 = out$gaps_mean + out$gaps_se,
+       code = 3, angle = 90, length = 0.02, lwd = 1)
+```
+
+A point plot of feature weights in a decreasing order.
+```{r, warning = FALSE}
+w <- out$result$w
+names(w) <- colnames(d$x)
+w <- sort(w, decreasing = TRUE)
+
+tb <- tibble(feature = names(w),
+             w = w)
+tb <- tb %>%
+  mutate(i = 1:nrow(tb))
+
+ggline(tb, "i", "w",
+       xlab = "feature index",
+       point.size = 0.1,
+       plot_type = "p")
+```
+
+A bar plot of nonzero weights of features in a decreasing order.
+```{r, warning = FALSE, fig.width = 7, fig.height = 3}
+w <- w[w > 0]
+
+features_inf <- paste0("x", 1:50)
+tb <- tibble(feature = names(w),
+             w = w,
+             feature_type = ifelse(feature %in% features_inf,
+                                   "informative",
+                                   "noise"))
+
+ggbarplot(tb, "feature", "w",
+          fill = "feature_type",
+          palette = c("#00AFBB", "#FC4E07")) + 
+  rotate_x_text()
+```
+
+## Hierarchical clustering
+Once feature selection is done, SelectCF performs hierarchical clustering by default. Here, we plot dendrogram of hierarchical clusters.
+```{r, warning = FALSE, fig.width = 7, fig.height = 3}
+y <- rep("red", length(d$lb))
+y[d$lb == 1] <- "green"
+y[d$lb == 2] <- "blue"
+y[d$lb == 3] <- "orange"
+
+ColorDendrogram(out$result$hc, y)
+```
+
+## Leiden clustering
+Now, the weighted dissimilarity matrix is subjected to Leiden clustering. To be consistent with single-cell analysis (e.g., Seurat), we use the weighted dissimilarity matrix to build a shared nearest-neighbor graph. Then, the shared nearest-neighbor graph is subjected to Ledien algorithm.
+```{r, warning = FALSE}
+snn <- cccd::nng(dx = out$result$u, k = 20, mutual = TRUE)
+cl <- leiden::leiden(snn,
+                     seed = 0,
+                     resolution_parameter = 0.3)
+
+tb_cl <- tibble(cell = rownames(d$x),
+                cluster = as.character(cl))
+```
+
+## UMAP projection
+Finally, we use the weighted dissimilarity matrix to project samples into 2-dimensional UMAP's.
+```{r, warning = FALSE}
+custom.config = umap::umap.defaults
+custom.config$n_neighbors = 30
+custom.config$min.dist = 0.3
+custom.config$random_state = 42
+umap_res <- umap::umap(out$result$u, config=custom.config, input="dist")
+
+tb_umap <- as_tibble(umap_res$layout)
+colnames(tb_umap) <- c("UMAP_1", "UMAP_2")
+tb_cl <- bind_cols(tb_cl, tb_umap)
+```
+
+Visualize Leiden clusters on UMAP.
+```{r, warning = FALSE}
+tb <- tb_cl %>%
+  mutate(cluster = factor(cluster, levels = as.character(sort(as.integer(unique(cluster))))))
+
+ggscatter(tb, x = "UMAP_1", y = "UMAP_2",
+          size = 1,
+          color = "cluster")
+```
+
+Visualize sample labels on UMAP.
+```{r, warning = FALSE}
+tb <- tb %>%
+  mutate(label = factor(as.character(d$lb), levels = as.character(sort(unique(d$lb)))))
+
+ggscatter(tb, x = "UMAP_1", y = "UMAP_2",
+          size = 1,
+          color = "label",
+          palette = c("red", "green", "blue", "orange"))
+```
+
